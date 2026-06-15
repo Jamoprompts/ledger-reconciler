@@ -14,8 +14,9 @@ optional AI-written narrative. The data here is fictional so nothing is confiden
 
 Usage:
     python3 reconcile.py
-    python3 reconcile.py --summary           # add an AI narrative (Claude if a key is set, else offline)
+    python3 reconcile.py --summary             # add an AI narrative (Claude if a key is set, else offline)
     python3 reconcile.py --csv exceptions.csv  # also write the exceptions to a file
+    python3 reconcile.py --tolerance 0.01      # ignore amount drift <= 1 cent (off by default)
 """
 
 import csv
@@ -43,8 +44,14 @@ def money(row):
         return 0.0
 
 
-def reconcile(a, b):
-    """Return a list of result dicts, one per key in the union of both sources."""
+def reconcile(a, b, tolerance=0.0):
+    """Return a list of result dicts, one per key in the union of both sources.
+
+    `tolerance` suppresses amount differences at or below the given absolute
+    value (e.g. 0.01 to ignore penny rounding). It defaults to 0.0 so the tool
+    surfaces every disagreement unless an operator opts in to swallow known
+    noise — reconciliation should hide nothing by default.
+    """
     results = []
     for key in sorted(set(a) | set(b)):
         ra, rb = a.get(key), b.get(key)
@@ -60,7 +67,12 @@ def reconcile(a, b):
             for field in COMPARE_FIELDS:
                 if ra.get(field) != rb.get(field):
                     if field == AMOUNT_FIELD:
-                        amt_delta = money(ra) - money(rb)
+                        delta = money(ra) - money(rb)
+                        # epsilon absorbs float representation error (100.01 - 100.00
+                        # is not exactly 0.01) so the threshold compares cleanly
+                        if abs(delta) <= tolerance + 1e-9:
+                            continue  # within tolerance — treat as agreement
+                        amt_delta = delta
                         diffs.append(f"amount {ra[field]} vs {rb[field]} (delta {amt_delta:+.2f})")
                     else:
                         diffs.append(f"{field} '{ra.get(field)}' vs '{rb.get(field)}'")
@@ -131,9 +143,18 @@ def narrative(exceptions, net):
             "Chase the field mismatches and any record missing downstream before sign-off.")
 
 
+def arg_value(name, default):
+    if name in sys.argv:
+        i = sys.argv.index(name)
+        if i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    return default
+
+
 if __name__ == "__main__":
+    tolerance = float(arg_value("--tolerance", 0.0))
     a, b = load(SOURCE_A), load(SOURCE_B)
-    results = reconcile(a, b)
+    results = reconcile(a, b, tolerance=tolerance)
     exceptions, net = report(results)
     if "--summary" in sys.argv:
         print("\nNARRATIVE:")

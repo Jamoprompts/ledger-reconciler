@@ -23,25 +23,65 @@ AI-enabled analyst workflow. The data is fictional so nothing is confidential.
 python3 reconcile.py                      # the reconciliation report
 python3 reconcile.py --summary            # add an AI/offline narrative
 python3 reconcile.py --csv exceptions.csv # also export the exceptions
+python3 reconcile.py --tolerance 0.01     # ignore amount drift <= 1 cent
+python3 -m unittest -v                    # run the tests
 ```
 
 Sample data lives in `system_of_record.csv` and `downstream_report.csv`. They
 disagree on purpose: an amount-and-status mismatch, a date drift, one record
 missing downstream, and one orphan that only exists downstream.
 
+## Sample output
+
+```text
+========================================================================
+LEDGER RECONCILIATION  —  system of record  vs  downstream report
+========================================================================
+
+MATCH  (4)
+  - INV-1001: all fields agree
+  - INV-1002: all fields agree
+  - INV-1004: all fields agree
+  - INV-1008: all fields agree
+
+FIELD_MISMATCH  (2)
+  - INV-1003: amount 15750.00 vs 15570.00 (delta +180.00); status 'pending' vs 'approved'  [+180.00]
+  - INV-1005: as_of '2026-05-31' vs '2026-05-30'
+
+MISSING_IN_DOWNSTREAM  (1)
+  - INV-1006: Wide World Importers present in record, absent downstream  [+21000.00]
+
+ORPHAN_IN_DOWNSTREAM  (1)
+  - INV-1007: Litware Inc present downstream, absent in record  [+7300.00]
+
+------------------------------------------------------------------------
+8 records compared · 4 clean · 4 exception(s) · net amount variance +28480.00
+------------------------------------------------------------------------
+```
+
+With `--summary` it adds a reviewer-facing narrative (offline summary shown; Claude is used instead when `ANTHROPIC_API_KEY` is set):
+
+```text
+NARRATIVE:
+  [offline] 4 exception(s): 2 field mismatch, 1 missing in downstream, 1 orphan in
+  downstream. Net amount variance +28480.00. Largest single item: INV-1006
+  (+21000.00). Chase the field mismatches and any record missing downstream before sign-off.
+```
+
 ## Design choices worth defending in an interview
 
 - **Every disagreement is categorized, not just flagged.** "These two numbers differ" is noise; "this row is missing downstream vs that row's amount is off by 180" is something a reviewer can act on.
 - **The dollar impact is signed and netted.** A reconciliation that doesn't tell you the size of the gap hasn't finished the job.
 - **The AI writes the summary, never the numbers.** Totals and deltas are computed in code; the model only narrates the facts it's handed. That keeps the figures trustworthy.
+- **Tolerance is opt-in, and defaults to zero.** `--tolerance` can swallow known rounding noise, but the default surfaces *every* disagreement — a reconciliation tool should hide nothing unless an operator deliberately says so. (The threshold compares with a small epsilon, because `100.01 - 100.00` isn't exactly `0.01` in floating point.)
 - **Zero dependencies.** Standard-library Python and CSV, so it runs anywhere and is easy to read.
 
 ## Honest scope
 
 An afternoon prototype: single-key join, four sample fields, CLI only. A
-production version would handle composite keys, tolerance thresholds (e.g. ignore
-sub-cent rounding), fuzzy counterparty matching, and a persisted exceptions queue.
-The point is to show the reconciliation logic and the judgment behind it.
+production version would handle composite keys, fuzzy counterparty matching, and
+a persisted exceptions queue. The point is to show the reconciliation logic and
+the judgment behind it.
 
 ## How it maps to the JD
 
